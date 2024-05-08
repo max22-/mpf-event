@@ -1,12 +1,14 @@
-﻿using System.Net.NetworkInformation;
+﻿using System.Diagnostics;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
 
 public class MPF
-{
+{ 
+
     private const string expectedEvent = "slide_slide4_created";
+    private const string mpfWindowTitle = "Mission Pinball Framework";
     private TcpClient? client = null;
     private bool quit = false;
     private Mutex quitMutex = new Mutex(false);
@@ -15,6 +17,16 @@ public class MPF
     Thread thread;
     bool firstLoop = true;
 
+    /* ********************************************************************************* */
+    [DllImport("user32.dll", SetLastError = true)]
+    static extern void keybd_event(byte bVk, byte bScan, int dwFlags, int dwExtraInfo);
+    public const int KEYEVENTF_EXTENDEDKEY = 0x0001; //Key down flag
+    public const int KEYEVENTF_KEYUP = 0x0002; //Key up flag
+    public const int ALT = 0xA4; //Alt key code
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+    /* ********************************************************************************* */
+
     public MPF()
     {
         thread = new Thread(new ThreadStart(ThreadProc));
@@ -22,6 +34,7 @@ public class MPF
     }
     ~MPF()
     {
+        Console.WriteLine("Destructor");
         quitMutex.Dispose();
         startGameMutex.Dispose();
     }
@@ -74,11 +87,10 @@ public class MPF
                 writer.WriteLine(str);
                 writer.WriteLine("monitor_start?category=events");
                 writer.Flush();
-                //writer.Dispose();
                 ReadLoop(reader);
 
             }
-            catch (Exception e)
+            catch (Exception)
             {
                 client?.Close();
                 client = null;
@@ -92,46 +104,87 @@ public class MPF
         string expectedPrefix = "monitored_event?json=";
         while (true)
         {
-            string? str = reader.ReadLine();
-            if (str == null)
-                return;
-            string prefix = str.Substring(0, expectedPrefix.Length);
-            if (prefix == expectedPrefix)
+            try
             {
-                string json = str.Substring(expectedPrefix.Length);
-                JsonNode? ev = JsonNode.Parse(json);
-                string? ev_name = (string)ev!["event_name"];
-                if (ev_name == null)
-                    continue;
-                Console.WriteLine($"event: {ev_name}");
-                if(ev_name == expectedEvent)
+                string? str = reader.ReadLine(); // generates an exception when disconnected
+                if (str == null)
+                    return;
+                string prefix = str.Substring(0, expectedPrefix.Length);
+                if (prefix == expectedPrefix)
                 {
-                    startGameMutex.WaitOne();
-                    startGame = true;
-                    startGameMutex.ReleaseMutex();
+                    string json = str.Substring(expectedPrefix.Length);
+                    JsonNode? ev = JsonNode.Parse(json);
+                    if (ev == null) continue;
+                    string? ev_name = (string?)ev!["event_name"];
+                    if (ev_name == null)
+                        continue;
+                    Console.WriteLine($"event: {ev_name}");
+                    if (ev_name == expectedEvent)
+                    {
+                        startGameMutex.WaitOne();
+                        startGame = true;
+                        startGameMutex.ReleaseMutex();
+                    }
                 }
+            } catch (Exception)
+            {
+                // probably disconnected
+                return;
             }
         }
     }
 
-    public void WaitForEvent()
+    private void Foreground(IntPtr hWnd)
     {
-        while (true)
+        // https://www.roelvanlisdonk.nl/2014/09/05/reliable-bring-external-process-window-to-foreground-without-c/
+        keybd_event(ALT, 0x45, KEYEVENTF_EXTENDEDKEY, 0);
+        keybd_event(ALT, 0x45, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
+        SetForegroundWindow(hWnd);
+    }
+
+    public bool CheckStart()
+    {
+        startGameMutex.WaitOne();
+        bool start = startGame;
+        startGameMutex.ReleaseMutex();
+        if (start)
         {
-            startGameMutex.WaitOne();
-            bool start = startGame;
-            startGameMutex.ReleaseMutex();
-            if (start) return; else Thread.Sleep(10);
+            start = false;
+            Foreground(Process.GetCurrentProcess().MainWindowHandle);
+            return true;
         }
+        return false;
+    }
+
+    public void ShowMPF()
+    {
+        IntPtr hWnd = IntPtr.Zero;
+        foreach (Process pList in Process.GetProcesses())
+        {
+            if (pList.MainWindowTitle.Contains(mpfWindowTitle))
+            {
+                hWnd = pList.MainWindowHandle;
+            }
+        }
+        
+        if (hWnd != IntPtr.Zero)
+        {
+            Console.WriteLine($"hWnd = {hWnd}");
+            Foreground(hWnd);
+        }
+        else Console.WriteLine("MPF not found");
     }
 
     public void Close()
     {
-        client?.Close();
+        Console.WriteLine("Closing");
         quitMutex.WaitOne();
         quit = true;
         quitMutex.ReleaseMutex();
+        client?.Close();
+        thread.Join();
     }
+
 }
 
 public class MPFTest
@@ -139,8 +192,13 @@ public class MPFTest
     public static void Main()
     {
         MPF mpf = new MPF();
-        mpf.WaitForEvent();
+        while(!mpf.CheckStart())
+        {
+            Thread.Sleep(10);
+        }
         Console.WriteLine("Starting game");
+        Thread.Sleep(5000);
+        mpf.ShowMPF();
         mpf.Close();
     }
 }
