@@ -9,6 +9,7 @@ public class MPF
 
     private const string expectedEvent = "slide_slide4_created";
     private const string mpfWindowTitle = "Mission Pinball Framework";
+    private const int pause = 5;
     private TcpClient? client = null;
     private bool quit = false;
     private Mutex quitMutex = new Mutex(false);
@@ -34,7 +35,6 @@ public class MPF
     }
     ~MPF()
     {
-        Console.WriteLine("Destructor");
         quitMutex.Dispose();
         startGameMutex.Dispose();
     }
@@ -48,9 +48,7 @@ public class MPF
 
     private void Pause()
     {
-        int seconds = 10;
-        Console.WriteLine($"Waiting for {seconds} seconds...");
-        Thread.Sleep(seconds * 1000);
+        Thread.Sleep(pause * 1000);
     }
 
     private void ThreadProc()
@@ -83,7 +81,6 @@ public class MPF
                     continue;
                 }
                 str = str?.Split('&')[0];
-                Console.WriteLine(str);
                 writer.WriteLine(str);
                 writer.WriteLine("monitor_start?category=events");
                 writer.Flush();
@@ -118,7 +115,6 @@ public class MPF
                     string? ev_name = (string?)ev!["event_name"];
                     if (ev_name == null)
                         continue;
-                    Console.WriteLine($"event: {ev_name}");
                     if (ev_name == expectedEvent)
                     {
                         startGameMutex.WaitOne();
@@ -162,22 +158,15 @@ public class MPF
         foreach (Process pList in Process.GetProcesses())
         {
             if (pList.MainWindowTitle.Contains(mpfWindowTitle))
-            {
                 hWnd = pList.MainWindowHandle;
-            }
         }
         
-        if (hWnd != IntPtr.Zero)
-        {
-            Console.WriteLine($"hWnd = {hWnd}");
+        if (hWnd != IntPtr.Zero) 
             Foreground(hWnd);
-        }
-        else Console.WriteLine("MPF not found");
     }
 
     public void Close()
     {
-        Console.WriteLine("Closing");
         quitMutex.WaitOne();
         quit = true;
         quitMutex.ReleaseMutex();
@@ -196,7 +185,6 @@ public class MPFTest
         {
             Thread.Sleep(10);
         }
-        Console.WriteLine("Starting game");
         Thread.Sleep(5000);
         mpf.ShowMPF();
         mpf.Close();
